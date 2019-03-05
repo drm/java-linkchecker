@@ -28,8 +28,8 @@ public class LinkChecker {
 	private final Map<String, Set<URI>> invalidUrls;
 	private final ExecutorService executor;
 	private final List<Future> running;
-	private final BiPredicate<URI, URI> filter;
-	private BiPredicate<URI, HttpResponse<String>> followLinks;
+	private final BiPredicate<URI, URI> shouldFollowLinks;
+	private final BiPredicate<URI, HttpResponse<String>> shouldExtractLinks;
 	private long startTimeMs;
 
 	public Map<URI, Set<URI>> getReverseLinks() {
@@ -40,10 +40,10 @@ public class LinkChecker {
 		return invalidUrls;
 	}
 
-	public LinkChecker(List<String> urls, BiPredicate<URI, URI> filter, BiPredicate<URI, HttpResponse<String>> followLinks, int numThreads) {
+	public LinkChecker(List<String> urls, BiPredicate<URI, URI> shouldFollowLinks, BiPredicate<URI, HttpResponse<String>> shouldExtractLinks, int numThreads) {
 		this.urls = new LinkedHashSet<>();
-		this.filter = filter;
-		this.followLinks = followLinks;
+		this.shouldFollowLinks = shouldFollowLinks;
+		this.shouldExtractLinks = shouldExtractLinks;
 		for (String url : urls) {
 			this.urls.add(URI.create(url));
 		}
@@ -152,7 +152,7 @@ public class LinkChecker {
 							logger.trace("Got status " + status + " at " + url);
 						}
 
-						if (followLinks.test(url, response)) {
+						if (shouldExtractLinks.test(url, response)) {
 							if (status == 200) {
 								if (response.headers().firstValue("Content-Type").orElse("").startsWith("text/html")) {
 									Document d = Jsoup.parse(response.body());
@@ -245,7 +245,7 @@ public class LinkChecker {
 			return false;
 		}
 
-		if (!filter.test(context, uri)) {
+		if (!shouldFollowLinks.test(context, uri)) {
 			logger.trace("Not following blacklisted url: " + uri);
 			return false;
 		}
@@ -336,7 +336,7 @@ public class LinkChecker {
 				}
 				return false;
 			},
-			(url, response) -> localHosts.contains(url.getHost()),
+			(context, response) -> localHosts.contains(context.getHost()),
 			40
 		);
 
@@ -350,14 +350,29 @@ public class LinkChecker {
 				}
 			}
 
+			int numErr = 0;
+			int numSuccess = 0;
 			for (Map.Entry<URI, Integer> r : linkChecker.getStatuses().entrySet()) {
 				if (r.getValue() >= 400 || r.getValue() <= 0) {
 					System.out.println("[" + r.getValue() + "] at " + r.getKey() + " (referred by following urls:)");
 					for (URI referredBy : linkChecker.getReverseLinks().get(r.getKey())) {
 						System.out.println(" + " + referredBy);
 					}
+					numErr ++;
+				} else {
+					numSuccess ++;
 				}
 			}
+			System.out.println(
+				String.format(
+					"Success: %d, Errors: %d, Invalids: %d",
+					numSuccess,
+					numErr,
+					linkChecker.getInvalidUrls().size()
+				)
+			);
+
+			System.out.println("Total number of resolved statuses: " + linkChecker.getStatuses().size());
 		}
 	}
 }
