@@ -7,7 +7,7 @@ Currently a quite naive but effective implementation of HTML-based link checker.
 ```text
 ./build.sh
 java -cp 'lib/*:bin/*.jar' nl.melp.linkchecker.LinkChecker \
-    [--follow-local|--follow-from-local]
+    [--follow-local|--follow-from-local|--no-follow]
     --threads=40
     http://localhost/
     https://localhost/
@@ -15,3 +15,6 @@ java -cp 'lib/*:bin/*.jar' nl.melp.linkchecker.LinkChecker \
 
 ## Issues?
 Please report them at github.com/drm/java-linkchecker
+
+# Copyright
+(c) 2019 Gerard van Helden
