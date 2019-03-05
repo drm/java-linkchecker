@@ -15,4 +15,3 @@ java -cp 'lib/*:bin/*.jar' nl.melp.linkchecker.LinkChecker \
 
 ## Issues?
 Please report them at github.com/drm/java-linkchecker
-
