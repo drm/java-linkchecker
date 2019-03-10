@@ -1,5 +1,8 @@
 package nl.melp.linkchecker;
 
+import nl.melp.redis.Redis;
+import nl.melp.redis.collections.SerializedHashMap;
+import nl.melp.redis.collections.SerializedSet;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -8,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.net.Socket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -32,31 +36,33 @@ public class LinkChecker {
 	private final BiPredicate<URI, HttpResponse<String>> shouldExtractLinks;
 	private long startTimeMs;
 
+	public LinkChecker(List<String> urls, BiPredicate<URI, URI> shouldFollowLinks, BiPredicate<URI, HttpResponse<String>> shouldExtractLinks, int numThreads) throws IOException {
+		Redis redis = new Redis(new Socket("localhost", 6379));
+
+		this.urls = new SerializedSet<>(redis, LinkChecker.class.getCanonicalName() + ".urls");
+		this.shouldFollowLinks = shouldFollowLinks;
+		this.shouldExtractLinks = shouldExtractLinks;
+		statuses = new SerializedHashMap<>(redis, LinkChecker.class.getCanonicalName() + ".statuses");
+		reverseLinks = new ConcurrentHashMap<>();
+		executor = Executors.newFixedThreadPool(numThreads);
+		running = new LinkedList<>();
+		clients = new LinkedBlockingDeque<>(numThreads);
+
+		for (String url : urls) {
+			this.urls.add(URI.create(url));
+		}
+		for (int i = 0; i < numThreads; i++) {
+			clients.offer(HttpClient.newHttpClient());
+		}
+		invalidUrls = new ConcurrentHashMap<>();
+	}
+
 	public Map<URI, Set<URI>> getReverseLinks() {
 		return reverseLinks;
 	}
 
 	public Map<String, Set<URI>> getInvalidUrls() {
 		return invalidUrls;
-	}
-
-	public LinkChecker(List<String> urls, BiPredicate<URI, URI> shouldFollowLinks, BiPredicate<URI, HttpResponse<String>> shouldExtractLinks, int numThreads) {
-		this.urls = new LinkedHashSet<>();
-		this.shouldFollowLinks = shouldFollowLinks;
-		this.shouldExtractLinks = shouldExtractLinks;
-		for (String url : urls) {
-			this.urls.add(URI.create(url));
-		}
-		statuses = new ConcurrentHashMap<>();
-		reverseLinks = new ConcurrentHashMap<>();
-		executor = Executors.newFixedThreadPool(numThreads);
-		running = new LinkedList<>();
-		clients = new LinkedBlockingDeque<>(numThreads);
-
-		for (int i = 0; i < numThreads; i++) {
-			clients.offer(HttpClient.newHttpClient());
-		}
-		invalidUrls = new ConcurrentHashMap<>();
 	}
 
 	public Map<URI, Integer> getStatuses() {
@@ -199,6 +205,8 @@ public class LinkChecker {
 					}
 					running.remove(r);
 				});
+				// givin' it a bit of time ....
+				Thread.sleep(200);
 			}
 		}
 
@@ -278,7 +286,7 @@ public class LinkChecker {
 		}
 	}
 
-	public static void main(String[] rawArgs) throws InterruptedException, ExecutionException {
+	public static void main(String[] rawArgs) throws InterruptedException, IOException {
 		Map<String, Set<String>> opts = new HashMap<>();
 		Set<String> flags = new HashSet<>();
 		List<String> args = new LinkedList<>();
