@@ -37,7 +37,7 @@ public class LinkChecker {
 	private long startTimeMs;
 
 	public LinkChecker(List<String> urls, BiPredicate<URI, URI> shouldFollowLinks, BiPredicate<URI, HttpResponse<String>> shouldExtractLinks, int numThreads) throws IOException {
-		Redis redis = new Redis(new Socket("localhost", 6379));
+		Redis redis = new Redis(new Socket(System.getProperty("redis.host", "localhost"), Integer.valueOf(System.getProperty("redis.port", "6379"))));
 
 		this.urls = new SerializedSet<>(redis, LinkChecker.class.getCanonicalName() + ".urls");
 		this.shouldFollowLinks = shouldFollowLinks;
@@ -341,8 +341,6 @@ public class LinkChecker {
 					return true;
 				}
 				if (flags.contains("follow-from-local")) {
-
-					
 					return localHosts.contains(context.getHost());
 				}
 				return false;
@@ -369,9 +367,9 @@ public class LinkChecker {
 					for (URI referredBy : linkChecker.getReverseLinks().get(r.getKey())) {
 						System.out.println(" + " + referredBy);
 					}
-					numErr ++;
+					numErr++;
 				} else {
-					numSuccess ++;
+					numSuccess++;
 				}
 			}
 			System.out.println(
