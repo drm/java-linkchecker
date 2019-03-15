@@ -36,25 +36,28 @@ public class LinkChecker {
 	private final BiPredicate<URI, HttpResponse<String>> shouldExtractLinks;
 	private long startTimeMs;
 
-	public LinkChecker(List<String> urls, BiPredicate<URI, URI> shouldFollowLinks, BiPredicate<URI, HttpResponse<String>> shouldExtractLinks, int numThreads) throws IOException {
-		Redis redis = new Redis(new Socket(System.getProperty("redis.host", "localhost"), Integer.valueOf(System.getProperty("redis.port", "6379"))));
-
-		this.urls = new SerializedSet<>(redis, LinkChecker.class.getCanonicalName() + ".urls");
+	public LinkChecker(
+		Set<URI> urlsToCheck,
+		Map<URI, Integer> results,
+		Map<URI, Set<URI>> reverseLinks,
+		Map<String, Set<URI>> invalidUrls,
+		BiPredicate<URI, URI> shouldFollowLinks,
+		BiPredicate<URI, HttpResponse<String>> shouldExtractLinks,
+		int numThreads
+	) {
+		this.urls = urlsToCheck;
 		this.shouldFollowLinks = shouldFollowLinks;
 		this.shouldExtractLinks = shouldExtractLinks;
-		statuses = new SerializedHashMap<>(redis, LinkChecker.class.getCanonicalName() + ".statuses");
-		reverseLinks = new ConcurrentHashMap<>();
-		executor = Executors.newFixedThreadPool(numThreads);
-		running = new LinkedList<>();
-		clients = new LinkedBlockingDeque<>(numThreads);
+		this.statuses = results;
+		this.reverseLinks = reverseLinks;
+		this.invalidUrls = invalidUrls;
+		this.executor = Executors.newFixedThreadPool(numThreads);
+		this.running = new LinkedList<>();
+		this.clients = new LinkedBlockingDeque<>(numThreads);
 
-		for (String url : urls) {
-			this.urls.add(URI.create(url));
-		}
 		for (int i = 0; i < numThreads; i++) {
 			clients.offer(HttpClient.newHttpClient());
 		}
-		invalidUrls = new ConcurrentHashMap<>();
 	}
 
 	public Map<URI, Set<URI>> getReverseLinks() {
@@ -69,7 +72,7 @@ public class LinkChecker {
 		return statuses;
 	}
 
-	private void monitor() {
+	private void logMonitor() {
 		try {
 			long dt = (System.currentTimeMillis() - startTimeMs) / 1000;
 			int size = statuses.size();
@@ -116,7 +119,7 @@ public class LinkChecker {
 		ScheduledExecutorService loggerService = Executors.newScheduledThreadPool(1);
 		executorServices.add(loggerService);
 
-		loggerService.scheduleAtFixedRate(this::monitor, 1, 1, TimeUnit.SECONDS);
+		loggerService.scheduleAtFixedRate(this::logMonitor, 1, 1, TimeUnit.SECONDS);
 
 		while (urls.size() > 0 || running.size() > 0) {
 			URI url;
@@ -316,8 +319,18 @@ public class LinkChecker {
 			localHosts.add(URI.create(startUri).getHost());
 		}
 
+		Socket socket = new Socket(System.getProperty("redis.host", "localhost"), Integer.valueOf(System.getProperty("redis.port", "6379")));
+		Redis redis = new Redis(socket);
+		Set<URI> urls = new SerializedSet<>(redis, LinkChecker.class.getCanonicalName() + ".urls");
+		for (String arg : args) {
+			urls.add(URI.create(arg));
+		}
+
 		LinkChecker linkChecker = new LinkChecker(
-			args,
+			urls,
+			new SerializedHashMap<>(redis, LinkChecker.class.getCanonicalName() + ".statuses"),
+			new HashMap<>(),
+			new HashMap<>(),
 			(context, url) -> {
 				if (opts.containsKey("include")) {
 					for (String s : opts.get("include")) {
