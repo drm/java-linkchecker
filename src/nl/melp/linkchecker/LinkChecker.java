@@ -306,7 +306,7 @@ public class LinkChecker {
 					}
 					opts.get(optName).addAll(Arrays.asList(values));
 				} else {
-					flags.add(s);
+					flags.add(s.substring(2));
 				}
 			} else {
 				args.add(s);
@@ -322,13 +322,20 @@ public class LinkChecker {
 		Socket socket = new Socket(System.getProperty("redis.host", "localhost"), Integer.valueOf(System.getProperty("redis.port", "6379")));
 		Redis redis = new Redis(socket);
 		Set<URI> urls = new SerializedSet<>(redis, LinkChecker.class.getCanonicalName() + ".urls");
+		SerializedHashMap<URI, Integer> results = new SerializedHashMap<>(redis, LinkChecker.class.getCanonicalName() + ".statuses");
+
+		if (flags.contains("reset")) {
+			urls.clear();
+			results.clear();
+		}
+
 		for (String arg : args) {
 			urls.add(URI.create(arg));
 		}
 
 		LinkChecker linkChecker = new LinkChecker(
 			urls,
-			new SerializedHashMap<>(redis, LinkChecker.class.getCanonicalName() + ".statuses"),
+			results,
 			new HashMap<>(),
 			new HashMap<>(),
 			(context, url) -> {
