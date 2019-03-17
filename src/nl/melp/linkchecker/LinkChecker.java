@@ -1,6 +1,7 @@
 package nl.melp.linkchecker;
 
 import nl.melp.redis.Redis;
+import nl.melp.redis.collections.ISerializer;
 import nl.melp.redis.collections.SerializedHashMap;
 import nl.melp.redis.collections.SerializedSet;
 import org.jsoup.Jsoup;
@@ -31,7 +32,7 @@ public class LinkChecker {
 	private final Map<URI, Set<URI>> reverseLinks;
 	private final Map<String, Set<URI>> invalidUrls;
 	private final ExecutorService executor;
-	private final List<Future> running;
+	private final Set<Future> running;
 	private final BiPredicate<URI, URI> shouldFollowLinks;
 	private final BiPredicate<URI, HttpResponse<String>> shouldExtractLinks;
 	private long startTimeMs;
@@ -52,24 +53,12 @@ public class LinkChecker {
 		this.reverseLinks = reverseLinks;
 		this.invalidUrls = invalidUrls;
 		this.executor = Executors.newFixedThreadPool(numThreads);
-		this.running = new LinkedList<>();
+		this.running = new HashSet<>();
 		this.clients = new LinkedBlockingDeque<>(numThreads);
 
 		for (int i = 0; i < numThreads; i++) {
 			clients.offer(HttpClient.newHttpClient());
 		}
-	}
-
-	public Map<URI, Set<URI>> getReverseLinks() {
-		return reverseLinks;
-	}
-
-	public Map<String, Set<URI>> getInvalidUrls() {
-		return invalidUrls;
-	}
-
-	public Map<URI, Integer> getStatuses() {
-		return statuses;
 	}
 
 	private void logMonitor() {
@@ -120,6 +109,17 @@ public class LinkChecker {
 		executorServices.add(loggerService);
 
 		loggerService.scheduleAtFixedRate(this::logMonitor, 1, 1, TimeUnit.SECONDS);
+		HashMap<Future, Long> startedAt = new HashMap<>();
+
+		Set<URI> reset = new HashSet<>();
+		statuses.forEach((uri, i) -> {
+			// -1 indicates "currently processing".
+			if (i == -1) {
+				reset.add(uri);
+			}
+		});
+		reset.forEach(statuses::remove);
+		reset.forEach(urls::add);
 
 		while (urls.size() > 0 || running.size() > 0) {
 			URI url;
@@ -162,8 +162,9 @@ public class LinkChecker {
 						}
 
 						if (shouldExtractLinks.test(url, response)) {
+							String contentType = response.headers().firstValue("Content-Type").orElse("");
 							if (status == 200) {
-								if (response.headers().firstValue("Content-Type").orElse("").startsWith("text/html")) {
+								if (contentType.startsWith("text/html")) {
 									Document d = Jsoup.parse(response.body());
 									Elements links = d.select("a[href]");
 									logger.trace("Found " + links.size() + " on " + url);
@@ -178,28 +179,37 @@ public class LinkChecker {
 								if (addUrl(url, location)) {
 									logger.trace("Following redirect (" + status + ") [" + url + " => " + location);
 								}
+							} else {
+								logger.debug("Skipping {}, content-type: {}", url, contentType);
 							}
 						}
 					} catch (IOException e) {
-						e.printStackTrace();
-						logger.error("Error opening url " + url + " (" + e.getClass().getCanonicalName() + ": " + e.getMessage() + "; so far referred to by " + reverseLinks.get(url));
 						statuses.put(url, 0);
+						logger.error(String.format("Error opening url %s (%s: %s; so far referred to by %s", url, e.getClass().getCanonicalName(), e.getMessage(), reverseLinks.getOrDefault(url, null)), e);
 					} catch (InterruptedException e) {
 						e.printStackTrace();
 						Thread.currentThread().interrupt();
-					} catch (NullPointerException npe) {
-						npe.printStackTrace();
-						throw npe;
 					} finally {
 						clients.offer(l);
 					}
 				}
 			);
+			// TODO `startedAt` and `running` can be merged.
+			synchronized (startedAt) {
+				startedAt.put(task, System.currentTimeMillis());
+			}
 			synchronized (running) {
 				running.add(task);
 			}
 			if (urls.size() == 0) {
 				logger.trace("Queue drained, waiting for first job to finish; still " + running.size() + " processing");
+				running.stream().forEach((r) -> {
+					if (!r.isCancelled() && startedAt.get(r) - System.currentTimeMillis() >= timeout * 1000) {
+						r.cancel(false);
+					} else if (startedAt.get(r) - System.currentTimeMillis() >= timeout * 2 * 1000) {
+						r.cancel(true);
+					}
+				});
 				running.stream().findFirst().ifPresent(r -> {
 					try {
 						r.get();
@@ -207,6 +217,7 @@ public class LinkChecker {
 						e.printStackTrace();
 					}
 					running.remove(r);
+					startedAt.remove(r);
 				});
 				// givin' it a bit of time ....
 				Thread.sleep(200);
@@ -216,6 +227,40 @@ public class LinkChecker {
 		executorServices.forEach(ExecutorService::shutdown);
 
 		return statuses;
+	}
+
+
+	public void report() {
+		for (Map.Entry<String, Set<URI>> entry : invalidUrls.entrySet()) {
+			System.out.println("INVALID: " + entry.getKey() + " (referred by following urls:)");
+			for (URI referredBy : invalidUrls.get(entry.getKey())) {
+				System.out.println(" + " + referredBy);
+			}
+		}
+
+		int numErr = 0;
+		int numSuccess = 0;
+		for (Map.Entry<URI, Integer> r : statuses.entrySet()) {
+			if (r.getValue() >= 400 || r.getValue() <= 0) {
+				System.out.println("[" + r.getValue() + "] at " + r.getKey() + " (referred by following urls:)");
+				for (URI referredBy : reverseLinks.get(r.getKey())) {
+					System.out.println(" + " + referredBy);
+				}
+				numErr++;
+			} else {
+				numSuccess++;
+			}
+		}
+		System.out.println(
+			String.format(
+				"Success: %d, Errors: %d, Invalids: %d",
+				numSuccess,
+				numErr,
+				invalidUrls.size()
+			)
+		);
+
+		System.out.println("Total number of resolved statuses: " + statuses.size());
 	}
 
 	private boolean addUrl(URI context, String linkedUrl) {
@@ -265,12 +310,12 @@ public class LinkChecker {
 			synchronized (urls) {
 				logger.trace("Found url: " + uri);
 				urls.add(uri);
-
-				// not synchronizing here, because already synchronized(urls)
-				if (!reverseLinks.containsKey(uri)) {
-					reverseLinks.put(uri, new HashSet<>());
+				Set<URI> set = new HashSet<>();
+				if (reverseLinks.containsKey(uri)) {
+					set.addAll(reverseLinks.get(uri));
 				}
-				reverseLinks.get(uri).add(context);
+				set.add(context);
+				reverseLinks.put(uri, set);
 			}
 			return true;
 		}
@@ -278,13 +323,14 @@ public class LinkChecker {
 		return false;
 	}
 
-
 	private void registerInvalidUrl(URI mentionedAt, String url, String reason) {
 		synchronized (invalidUrls) {
-			if (!invalidUrls.containsKey(url)) {
-				invalidUrls.put(url, new HashSet<>());
+			Set<URI> mentions = new HashSet<>();
+			if (invalidUrls.containsKey(url)) {
+				mentions.addAll(invalidUrls.get(url));
 			}
-			invalidUrls.get(url).add(mentionedAt);
+			mentions.add(mentionedAt);
+			invalidUrls.put(url, mentions);
 			logger.warn("Invalid url: " + url + " (" + reason + ")");
 		}
 	}
@@ -319,89 +365,118 @@ public class LinkChecker {
 			localHosts.add(URI.create(startUri).getHost());
 		}
 
-		Socket socket = new Socket(System.getProperty("redis.host", "localhost"), Integer.valueOf(System.getProperty("redis.port", "6379")));
-		Redis redis = new Redis(socket);
-		Set<URI> urls = new SerializedSet<>(redis, LinkChecker.class.getCanonicalName() + ".urls");
-		SerializedHashMap<URI, Integer> results = new SerializedHashMap<>(redis, LinkChecker.class.getCanonicalName() + ".statuses");
+		String redisHost = opts.getOrDefault("redis-host", Collections.emptySet()).stream().findFirst().orElse(System.getProperty("redis.host", "localhost"));
+		String redisPort = opts.getOrDefault("redis-port", Collections.emptySet()).stream().findFirst().orElse(System.getProperty("redis.port", "6379"));
 
-		if (flags.contains("reset")) {
-			urls.clear();
-			results.clear();
-		}
+		try (Socket socket = new Socket(redisHost, Integer.valueOf(redisPort))) {
+			Redis redis = new Redis(socket);
+			Set<URI> urls = new SerializedSet<>(redis, LinkChecker.class.getCanonicalName() + ".urls");
+			SerializedHashMap<URI, Integer> results = new SerializedHashMap<>(redis, LinkChecker.class.getCanonicalName() + ".statuses");
+			// TODO unchecked on purpose: the generic types are incompatible.
+			Map reverseLinks = new SerializedHashMap<>(redis, LinkChecker.class.getCanonicalName() + ".reverseLinks");
+			// TODO unchecked on purpose: the generic types are incompatible.
+			Map invalidUrls = new SerializedHashMap<>(redis, LinkChecker.class.getCanonicalName() + ".invalidUrls");
 
-		for (String arg : args) {
-			urls.add(URI.create(arg));
-		}
+			if (flags.contains("reset")) {
+				urls.clear();
+				results.clear();
+				reverseLinks.clear();
+				invalidUrls.clear();
+			}
 
-		LinkChecker linkChecker = new LinkChecker(
-			urls,
-			results,
-			new HashMap<>(),
-			new HashMap<>(),
-			(context, url) -> {
-				if (opts.containsKey("include")) {
-					for (String s : opts.get("include")) {
-						if (url.getPath().matches(s)) {
-							logger.trace("URL " + url + " matches pattern " + s + "; including");
-							return true;
+			for (String arg : args) {
+				urls.add(URI.create(arg));
+			}
+
+			LinkChecker linkChecker = new LinkChecker(
+				urls,
+				results,
+				reverseLinks,
+				invalidUrls,
+				(context, url) -> {
+					if (opts.containsKey("include")) {
+						for (String s : opts.get("include")) {
+							if (url.getPath().matches(s)) {
+								logger.trace("URL " + url + " matches pattern " + s + "; including");
+								return true;
+							}
+						}
+
+						return false;
+					}
+					if (opts.containsKey("ignore")) {
+						for (String s : opts.get("ignore")) {
+							if (url.getPath().matches(s)) {
+								logger.trace("URL " + url + " matches pattern " + s + "; ignoring");
+								return false;
+							}
 						}
 					}
-
+					if (localHosts.contains(url.getHost())) {
+						return true;
+					}
+					if (flags.contains("follow-from-local")) {
+						return localHosts.contains(context.getHost());
+					}
 					return false;
-				}
-				if (opts.containsKey("ignore")) {
-					for (String s : opts.get("ignore")) {
-						if (url.getPath().matches(s)) {
-							logger.trace("URL " + url + " matches pattern " + s + "; ignoring");
-							return false;
-						}
-					}
-				}
-				if (localHosts.contains(url.getHost())) {
-					return true;
-				}
-				if (flags.contains("follow-from-local")) {
-					return localHosts.contains(context.getHost());
-				}
-				return false;
-			},
-			(context, response) -> !flags.contains("no-follow") && localHosts.contains(context.getHost()),
-			opts.containsKey("threads") ? Integer.valueOf(opts.get("threads").stream().findFirst().orElse("40")) : 40
-		);
-
-		try {
-			linkChecker.run();
-		} finally {
-			for (Map.Entry<String, Set<URI>> entry : linkChecker.getInvalidUrls().entrySet()) {
-				System.out.println("INVALID: " + entry.getKey() + " (referred by following urls:)");
-				for (URI referredBy : linkChecker.getInvalidUrls().get(entry.getKey())) {
-					System.out.println(" + " + referredBy);
-				}
-			}
-
-			int numErr = 0;
-			int numSuccess = 0;
-			for (Map.Entry<URI, Integer> r : linkChecker.getStatuses().entrySet()) {
-				if (r.getValue() >= 400 || r.getValue() <= 0) {
-					System.out.println("[" + r.getValue() + "] at " + r.getKey() + " (referred by following urls:)");
-					for (URI referredBy : linkChecker.getReverseLinks().get(r.getKey())) {
-						System.out.println(" + " + referredBy);
-					}
-					numErr++;
-				} else {
-					numSuccess++;
-				}
-			}
-			System.out.println(
-				String.format(
-					"Success: %d, Errors: %d, Invalids: %d",
-					numSuccess,
-					numErr,
-					linkChecker.getInvalidUrls().size()
-				)
+				},
+				(context, response) -> !flags.contains("no-follow") && localHosts.contains(context.getHost()),
+				opts.containsKey("threads") ? Integer.valueOf(opts.get("threads").stream().findFirst().orElse("40")) : 40
 			);
 
-			System.out.println("Total number of resolved statuses: " + linkChecker.getStatuses().size());
+			if (flags.contains("resume") || flags.contains("reset")) {
+				linkChecker.run();
+			}
+			if (flags.contains("report")) {
+				ISerializer<String> stringSerializer = new ISerializer<>() {
+					@Override
+					public byte[] serialize(String uri) {
+						return uri.getBytes();
+					}
+
+					@Override
+					public String deserialize(byte[] bytes) {
+						return new String(bytes);
+					}
+				};
+				SerializedHashMap<String, Integer> report = new SerializedHashMap<>(
+					stringSerializer,
+					new ISerializer<>() {
+						@Override
+						public byte[] serialize(Integer v) {
+							return v.toString().getBytes();
+						}
+
+						@Override
+						public Integer deserialize(byte[] bytes) {
+							return Integer.valueOf(new String(bytes));
+						}
+					},
+					redis, LinkChecker.class.getCanonicalName() + ".report.statuses");
+				SerializedHashMap<String, String> refers = new SerializedHashMap<>(
+					stringSerializer,
+					stringSerializer,
+					redis, LinkChecker.class.getCanonicalName() + ".report.referers");
+
+				report.clear();
+				results.forEach((k, v) -> {
+					if (v == 0 || v >= 400) {
+						report.put(k.toString(), v);
+						refers.put(k.toString(), String.join(
+							"\n",
+							((Set<URI>)reverseLinks.get(k)).stream().map(URI::toString).toArray(String[]::new))
+						);
+					}
+				});
+				invalidUrls.forEach((s, uri) -> {
+					report.put((String)s, 0);
+					refers.put((String)s, String.join(
+						"\n",
+						((Set<URI>)uri).stream().map(URI::toString).toArray(String[]::new))
+					);
+				});
+				linkChecker.report();
+			}
 		}
 	}
 }
