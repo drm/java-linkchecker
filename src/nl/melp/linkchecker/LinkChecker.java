@@ -195,6 +195,7 @@ public class LinkChecker {
 					}
 				}
 			);
+			// TODO `startedAt` and `running` can be merged.
 			synchronized (startedAt) {
 				startedAt.put(task, System.currentTimeMillis());
 			}
