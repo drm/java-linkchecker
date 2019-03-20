@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.net.ConnectException;
 import java.net.Socket;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -477,6 +478,8 @@ public class LinkChecker {
 				});
 				linkChecker.report();
 			}
+		} catch (ConnectException e) {
+			throw new RuntimeException(String.format("Error connecting to redis at %s:%s", redisHost, redisPort), e);
 		}
 	}
 }
