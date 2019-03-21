@@ -1,9 +1,7 @@
 package nl.melp.linkchecker;
 
 import nl.melp.redis.Redis;
-import nl.melp.redis.collections.ISerializer;
-import nl.melp.redis.collections.SerializedHashMap;
-import nl.melp.redis.collections.SerializedSet;
+import nl.melp.redis.collections.*;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -19,6 +17,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.Collection;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.BiPredicate;
@@ -166,6 +165,7 @@ public class LinkChecker {
 							String contentType = response.headers().firstValue("Content-Type").orElse("");
 							if (status == 200) {
 								if (contentType.startsWith("text/html")) {
+									response.body();
 									Document d = Jsoup.parse(response.body());
 									Elements links = d.select("a[href]");
 									logger.trace("Found " + links.size() + " on " + url);
@@ -265,11 +265,6 @@ public class LinkChecker {
 	}
 
 	private boolean addUrl(URI context, String linkedUrl) {
-		if (invalidUrls.containsKey(linkedUrl)) {
-			invalidUrls.get(linkedUrl).add(context);
-			return false;
-		}
-
 		URI uri;
 
 		try {
@@ -311,12 +306,7 @@ public class LinkChecker {
 			synchronized (urls) {
 				logger.trace("Found url: " + uri);
 				urls.add(uri);
-				Set<URI> set = new HashSet<>();
-				if (reverseLinks.containsKey(uri)) {
-					set.addAll(reverseLinks.get(uri));
-				}
-				set.add(context);
-				reverseLinks.put(uri, set);
+				reverseLinks.get(uri).add(context);
 			}
 			return true;
 		}
@@ -325,15 +315,7 @@ public class LinkChecker {
 	}
 
 	private void registerInvalidUrl(URI mentionedAt, String url, String reason) {
-		synchronized (invalidUrls) {
-			Set<URI> mentions = new HashSet<>();
-			if (invalidUrls.containsKey(url)) {
-				mentions.addAll(invalidUrls.get(url));
-			}
-			mentions.add(mentionedAt);
-			invalidUrls.put(url, mentions);
-			logger.warn("Invalid url: " + url + " (" + reason + ")");
-		}
+		invalidUrls.get(url).add(mentionedAt);
 	}
 
 	public static void main(String[] rawArgs) throws InterruptedException, IOException {
@@ -373,10 +355,9 @@ public class LinkChecker {
 			Redis redis = new Redis(socket);
 			Set<URI> urls = new SerializedSet<>(redis, LinkChecker.class.getCanonicalName() + ".urls");
 			SerializedHashMap<URI, Integer> results = new SerializedHashMap<>(redis, LinkChecker.class.getCanonicalName() + ".statuses");
-			// TODO unchecked on purpose: the generic types are incompatible.
-			Map reverseLinks = new SerializedHashMap<>(redis, LinkChecker.class.getCanonicalName() + ".reverseLinks");
-			// TODO unchecked on purpose: the generic types are incompatible.
-			Map invalidUrls = new SerializedHashMap<>(redis, LinkChecker.class.getCanonicalName() + ".invalidUrls");
+
+			Map<URI, Set<URI>> reverseLinks = new SerializedMappedSet<>(Serializers.of(URI.class), Serializers.of(URI.class), redis, LinkChecker.class.getCanonicalName() + ".reverseLinks");
+			Map<String, Set<URI>> invalidUrls = new SerializedMappedSet<>(Serializers.of(String.class), Serializers.of(URI.class), redis, LinkChecker.class.getCanonicalName() + ".invalidUrls");
 
 			if (flags.contains("reset")) {
 				urls.clear();
@@ -465,21 +446,25 @@ public class LinkChecker {
 						report.put(k.toString(), v);
 						refers.put(k.toString(), String.join(
 							"\n",
-							((Set<URI>)reverseLinks.get(k)).stream().map(URI::toString).toArray(String[]::new))
+							reverseLinks.get(k).stream().map(URI::toString).toArray(String[]::new))
 						);
 					}
 				});
 				invalidUrls.forEach((s, uri) -> {
-					report.put((String)s, 0);
-					refers.put((String)s, String.join(
+					report.put(s, 0);
+					refers.put(s, String.join(
 						"\n",
-						((Set<URI>)uri).stream().map(URI::toString).toArray(String[]::new))
+						uri.stream().map(URI::toString).toArray(String[]::new))
 					);
 				});
 				linkChecker.report();
 			}
 		} catch (ConnectException e) {
 			throw new RuntimeException(String.format("Error connecting to redis at %s:%s", redisHost, redisPort), e);
+		}
+
+		if (!flags.contains("resume") && !flags.contains("reset") && !flags.contains("report")) {
+			System.err.println("None of --resume, --reset or --report given, no action taken.");
 		}
 	}
 }

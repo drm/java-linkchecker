@@ -3,6 +3,12 @@
 set -x
 set -e
 
+(
+	cd ../java-redis-collections
+	./build.sh
+	cp bin/java-redis-collections*.jar ../link-checker/lib/
+)
+
 rm -rf ./bin/
 mkdir bin;
 
