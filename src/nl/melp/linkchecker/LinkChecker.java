@@ -121,90 +121,83 @@ public class LinkChecker {
 		reset.forEach(statuses::remove);
 		reset.forEach(urls::add);
 
-		while (urls.size() > 0 || running.size() > 0) {
-			URI url;
-			synchronized (urls) {
-				if (urls.size() > 0) {
-					url = urls.stream().findFirst().orElseThrow();
-					urls.remove(url);
-				} else {
+		do {
+			for (URI url : urls) {
+				urls.remove(url);
+				if (statuses.containsKey(url)) {
 					continue;
 				}
-			}
-			if (statuses.containsKey(url)) {
-				continue;
-			}
+				statuses.put(url, -1);
+				HttpClient l = clients.take();
 
-			statuses.put(url, -1);
-			HttpClient l = clients.take();
+				Future<?> task = executor.submit(
+					() -> {
+						try {
+							if (statuses.get(url) >= 0) {
+								return; // URL was resolved by another thread.
+							}
 
-			Future<?> task = executor.submit(
-				() -> {
-					try {
-						if (statuses.get(url) >= 0) {
-							return; // URL was resolved by another thread.
-						}
+							logger.trace("OPENING " + url);
 
-						logger.trace("OPENING " + url);
+							HttpRequest request = HttpRequest.newBuilder()
+								.uri(url)
+								.timeout(Duration.ofSeconds(timeout))
+								.build();
+							HttpResponse<String> response = l.send(request, HttpResponse.BodyHandlers.ofString());
+							int status = response.statusCode();
+							statuses.put(url, status);
 
-						HttpRequest request = HttpRequest.newBuilder()
-							.uri(url)
-							.timeout(Duration.ofSeconds(timeout))
-							.build();
-						HttpResponse<String> response = l.send(request, HttpResponse.BodyHandlers.ofString());
-						int status = response.statusCode();
-						statuses.put(url, status);
+							if (status >= 400) {
+								logger.info("Got status " + status + " at " + url + "; so far referred to by " + reverseLinks.get(url));
+							} else {
+								logger.trace("Got status " + status + " at " + url);
+							}
 
-						if (status >= 400) {
-							logger.info("Got status " + status + " at " + url + "; so far referred to by " + reverseLinks.get(url));
-						} else {
-							logger.trace("Got status " + status + " at " + url);
-						}
-
-						if (shouldExtractLinks.test(url, response)) {
-							String contentType = response.headers().firstValue("Content-Type").orElse("");
-							if (status == 200) {
-								if (contentType.startsWith("text/html")) {
-									response.body();
-									Document d = Jsoup.parse(response.body());
-									Elements links = d.select("a[href]");
-									logger.trace("Found " + links.size() + " on " + url);
-									for (Element link : links) {
-										addUrl(url, link.attr("href"));
+							if (shouldExtractLinks.test(url, response)) {
+								String contentType = response.headers().firstValue("Content-Type").orElse("");
+								if (status == 200) {
+									if (contentType.startsWith("text/html")) {
+										response.body();
+										Document d = Jsoup.parse(response.body());
+										Elements links = d.select("a[href]");
+										logger.trace("Found " + links.size() + " on " + url);
+										for (Element link : links) {
+											addUrl(url, link.attr("href"));
+										}
+									} else {
+										logger.trace("Not following links in content type " + response.headers().firstValue("Content-Type").orElse("UNKNOWN"));
+									}
+								} else if (response.headers().firstValue("Location").isPresent()) {
+									String location = response.headers().firstValue("Location").get();
+									if (addUrl(url, location)) {
+										logger.trace("Following redirect (" + status + ") [" + url + " => " + location);
 									}
 								} else {
-									logger.trace("Not following links in content type " + response.headers().firstValue("Content-Type").orElse("UNKNOWN"));
+									logger.debug("Skipping {}, content-type: {}", url, contentType);
 								}
-							} else if (response.headers().firstValue("Location").isPresent()) {
-								String location = response.headers().firstValue("Location").get();
-								if (addUrl(url, location)) {
-									logger.trace("Following redirect (" + status + ") [" + url + " => " + location);
-								}
-							} else {
-								logger.debug("Skipping {}, content-type: {}", url, contentType);
 							}
+						} catch (IOException e) {
+							statuses.put(url, 0);
+							logger.error(String.format("Error opening url %s (%s: %s; so far referred to by %s", url, e.getClass().getCanonicalName(), e.getMessage(), reverseLinks.getOrDefault(url, null)), e);
+						} catch (InterruptedException e) {
+							e.printStackTrace();
+							Thread.currentThread().interrupt();
+						} finally {
+							clients.offer(l);
 						}
-					} catch (IOException e) {
-						statuses.put(url, 0);
-						logger.error(String.format("Error opening url %s (%s: %s; so far referred to by %s", url, e.getClass().getCanonicalName(), e.getMessage(), reverseLinks.getOrDefault(url, null)), e);
-					} catch (InterruptedException e) {
-						e.printStackTrace();
-						Thread.currentThread().interrupt();
-					} finally {
-						clients.offer(l);
 					}
+				);
+				// TODO `startedAt` and `running` can be merged.
+				synchronized (startedAt) {
+					startedAt.put(task, System.currentTimeMillis());
 				}
-			);
-			// TODO `startedAt` and `running` can be merged.
-			synchronized (startedAt) {
-				startedAt.put(task, System.currentTimeMillis());
+				synchronized (running) {
+					running.add(task);
+				}
 			}
-			synchronized (running) {
-				running.add(task);
-			}
-			if (urls.size() == 0) {
+			if (!urls.iterator().hasNext()) {
 				logger.trace("Queue drained, waiting for first job to finish; still " + running.size() + " processing");
-				running.stream().forEach((r) -> {
+				running.forEach((r) -> {
 					if (!r.isCancelled() && startedAt.get(r) - System.currentTimeMillis() >= timeout * 1000) {
 						r.cancel(false);
 					} else if (startedAt.get(r) - System.currentTimeMillis() >= timeout * 2 * 1000) {
@@ -223,7 +216,7 @@ public class LinkChecker {
 				// givin' it a bit of time ....
 				Thread.sleep(200);
 			}
-		}
+		} while (urls.iterator().hasNext() || running.size() > 0);
 
 		executorServices.forEach(ExecutorService::shutdown);
 
