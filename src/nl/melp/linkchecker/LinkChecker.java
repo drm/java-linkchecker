@@ -104,13 +104,12 @@ public class LinkChecker {
 		Set<ExecutorService> executorServices = new HashSet<>();
 		executorServices.add(executor);
 
-		startTimeMs = System.currentTimeMillis();
 		ScheduledExecutorService loggerService = Executors.newScheduledThreadPool(1);
 		executorServices.add(loggerService);
 
-		loggerService.scheduleAtFixedRate(this::logMonitor, 1, 1, TimeUnit.SECONDS);
-		HashMap<Future, Long> startedAt = new HashMap<>();
+		startTimeMs = System.currentTimeMillis();
 
+		logger.info("Scanning for non-finished results");
 		Set<URI> reset = new HashSet<>();
 		statuses.forEach((uri, i) -> {
 			// -1 indicates "currently processing".
@@ -118,9 +117,17 @@ public class LinkChecker {
 				reset.add(uri);
 			}
 		});
-		reset.forEach(statuses::remove);
+		if (reset.size() > 0) {
+			logger.info("{} found, restoring the to the queue", reset.size());
+		} else {
+			logger.info("None found.", reset.size());
+		}
 		reset.forEach(urls::add);
+		reset.forEach(statuses::remove);
 
+		this.logMonitor();
+		loggerService.scheduleAtFixedRate(this::logMonitor, 1, 1, TimeUnit.SECONDS);
+		HashMap<Future, Long> startedAt = new HashMap<>();
 		do {
 			for (URI url : urls) {
 				urls.remove(url);
@@ -128,7 +135,7 @@ public class LinkChecker {
 					continue;
 				}
 				statuses.put(url, -1);
-				HttpClient l = clients.take();
+				HttpClient httpClient = clients.take();
 
 				Future<?> task = executor.submit(
 					() -> {
@@ -143,7 +150,8 @@ public class LinkChecker {
 								.uri(url)
 								.timeout(Duration.ofSeconds(timeout))
 								.build();
-							HttpResponse<String> response = l.send(request, HttpResponse.BodyHandlers.ofString());
+
+							HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 							int status = response.statusCode();
 							statuses.put(url, status);
 
@@ -176,14 +184,14 @@ public class LinkChecker {
 									logger.debug("Skipping {}, content-type: {}", url, contentType);
 								}
 							}
-						} catch (IOException e) {
+						} catch (java.lang.IllegalArgumentException | IOException e) {
 							statuses.put(url, 0);
 							logger.error(String.format("Error opening url %s (%s: %s; so far referred to by %s", url, e.getClass().getCanonicalName(), e.getMessage(), reverseLinks.getOrDefault(url, null)), e);
 						} catch (InterruptedException e) {
 							e.printStackTrace();
 							Thread.currentThread().interrupt();
 						} finally {
-							clients.offer(l);
+							clients.offer(httpClient);
 						}
 					}
 				);
