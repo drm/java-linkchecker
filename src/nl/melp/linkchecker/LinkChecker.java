@@ -17,7 +17,6 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
@@ -458,6 +457,8 @@ public class LinkChecker {
 					redis, LinkChecker.class.getCanonicalName() + ".report.referers");
 
 				report.clear();
+				refers.clear();
+
 				results.forEach((k, v) -> {
 					if (v == 0 || v >= 400) {
 						report.put(k.toString(), v);
