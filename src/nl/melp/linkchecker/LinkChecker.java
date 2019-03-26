@@ -17,6 +17,10 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Collection;
 import java.util.*;
 import java.util.concurrent.*;
@@ -408,7 +412,19 @@ public class LinkChecker {
 			);
 
 			if (flags.contains("resume") || flags.contains("reset")) {
-				linkChecker.run();
+				Map<String, String> timestamps = new SerializedHashMap<>(Serializers.of(String.class), Serializers.of(String.class), redis, LinkChecker.class.getCanonicalName() + ".timestamps");
+				timestamps.remove("stop");
+				if (flags.contains("reset")) {
+					timestamps.put("start", ZonedDateTime.now(ZoneOffset.UTC).format(DateTimeFormatter.ISO_DATE_TIME);
+					timestamps.remove("resume");
+				} else {
+					timestamps.put("resume", ZonedDateTime.now(ZoneOffset.UTC).format(DateTimeFormatter.ISO_DATE_TIME));
+				}
+				try {
+					linkChecker.run();
+				} finally {
+					timestamps.put("stop", ZonedDateTime.now(ZoneOffset.UTC).format(DateTimeFormatter.ISO_DATE_TIME));
+				}
 			}
 			if (flags.contains("report")) {
 				ISerializer<String> stringSerializer = new ISerializer<>() {
@@ -466,6 +482,6 @@ public class LinkChecker {
 
 		if (!flags.contains("resume") && !flags.contains("reset") && !flags.contains("report")) {
 			System.err.println("None of --resume, --reset or --report given, no action taken.");
-		}
+		} else if ()
 	}
 }
