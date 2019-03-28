@@ -112,22 +112,6 @@ public class LinkChecker {
 
 		startTimeMs = System.currentTimeMillis();
 
-		logger.info("Scanning for non-finished results");
-		Set<URI> reset = new HashSet<>();
-		statuses.forEach((uri, i) -> {
-			// -1 indicates "currently processing".
-			if (i == -1) {
-				reset.add(uri);
-			}
-		});
-		if (reset.size() > 0) {
-			logger.info("{} found, restoring the to the queue", reset.size());
-		} else {
-			logger.info("None found.", reset.size());
-		}
-		reset.forEach(urls::add);
-		reset.forEach(statuses::remove);
-
 		this.logMonitor();
 		loggerService.scheduleAtFixedRate(this::logMonitor, 1, 1, TimeUnit.SECONDS);
 		HashMap<Future, Long> startedAt = new HashMap<>();
@@ -189,7 +173,7 @@ public class LinkChecker {
 							}
 						} catch (java.lang.IllegalArgumentException | IOException e) {
 							statuses.put(url, 0);
-							logger.error(String.format("Error opening url %s (%s: %s; so far referred to by %s", url, e.getClass().getCanonicalName(), e.getMessage(), reverseLinks.getOrDefault(url, null)), e);
+							logger.warn(String.format("Error opening url %s (%s: %s; so far referred to by %s", url, e.getClass().getCanonicalName(), e.getMessage(), new HashSet<>(reverseLinks.getOrDefault(url, null))), e);
 						} catch (InterruptedException e) {
 							e.printStackTrace();
 							Thread.currentThread().interrupt();
@@ -360,7 +344,7 @@ public class LinkChecker {
 			Set<URI> urls = new SerializedSet<>(redis, LinkChecker.class.getCanonicalName() + ".urls");
 			SerializedHashMap<URI, Integer> results = new SerializedHashMap<>(redis, LinkChecker.class.getCanonicalName() + ".statuses");
 
-			Map<URI, Set<URI>> reverseLinks = new SerializedMappedSet<>(Serializers.of(URI.class), Serializers.of(URI.class), redis, LinkChecker.class.getCanonicalName() + ".reverseLinks");
+			Map<URI, Set<URI>> reverseLinks = new SerializedMappedSet<>(Serializers.of(URI.class), Serializers.of(URI.class), redis, prefixKeyName(".reverseLinks"));
 			Map<String, Set<URI>> invalidUrls = new SerializedMappedSet<>(Serializers.of(String.class), Serializers.of(URI.class), redis, LinkChecker.class.getCanonicalName() + ".invalidUrls");
 
 			if (flags.contains("reset")) {
@@ -368,6 +352,28 @@ public class LinkChecker {
 				results.clear();
 				reverseLinks.clear();
 				invalidUrls.clear();
+			} else if (!flags.contains("no-recheck") && (flags.contains("resume") || flags.contains("reset"))) {
+				Set<URI> reset = new HashSet<>();
+				logger.info("Scanning " + results.size() + " results for recheckable links");
+				results.forEach((k, v) -> {
+					if (isErrorStatus(v)) {
+						if (flags.contains("recheck-only-errors") && v > 0) {
+							return;
+						}
+						if (!flags.contains("recheck") && v >= 0) {
+							return;
+						}
+						urls.add(k);
+						reset.add(k);
+					}
+				});
+				if (reset.size() > 0) {
+					logger.info("{} found, restoring the to the queue", reset.size());
+					urls.addAll(reset);
+					reset.forEach(results::remove);
+				} else {
+					logger.info("None found.", reset.size());
+				}
 			}
 
 			for (String arg : args) {
@@ -456,11 +462,12 @@ public class LinkChecker {
 					stringSerializer,
 					redis, LinkChecker.class.getCanonicalName() + ".report.referers");
 
+				logger.info("Building report for " + results.size() + " keys and " + invalidUrls.size() + " invalids");
 				report.clear();
 				refers.clear();
 
 				results.forEach((k, v) -> {
-					if (v == 0 || v >= 400) {
+					if (flags.contains("report-all") || isErrorStatus(v)) {
 						report.put(k.toString(), v);
 						refers.put(k.toString(), String.join(
 							"\n",
@@ -484,5 +491,13 @@ public class LinkChecker {
 		if (!flags.contains("resume") && !flags.contains("reset") && !flags.contains("report")) {
 			System.err.println("None of --resume, --reset or --report given, no action taken.");
 		}
+	}
+
+	private static String prefixKeyName(String s) {
+		return LinkChecker.class.getCanonicalName() + s;
+	}
+
+	private static boolean isErrorStatus(int v) {
+		return v <= 0 || v >= 400;
 	}
 }
