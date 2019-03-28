@@ -42,7 +42,7 @@ java -cp 'lib/*:bin/*.jar' nl.melp.linkchecker.LinkChecker
 | `--recheck-only-errors` | Only recheck links that had an internal error state, i.e. all urls that (which usually are out of your control anyway |
 | `--no-recheck` | Don't do recheck, even if url's are marked as "processing". This happens if a linkchecker process was interrupted without finishing cleanly. |
 | `--reset` | Start with a clean slate |
-| `--resume` | Resume a previously stopped session. Without a properly configured Redis instance, this has no effect. |
+| `--resume` | Resume a previously stopped session. |
 | `--report` | When done, write a report to stdout and to reporting keys in Redis. |
 | `--report-all` | Also report working links. By default, only error statuses are reported |
 

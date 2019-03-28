@@ -9,6 +9,10 @@ import org.jsoup.select.Elements;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
 import java.io.IOException;
 import java.net.ConnectException;
 import java.net.Socket;
@@ -16,6 +20,8 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.security.KeyManagementException;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
@@ -306,7 +312,7 @@ public class LinkChecker {
 		invalidUrls.get(url).add(mentionedAt);
 	}
 
-	public static void main(String[] rawArgs) throws InterruptedException, IOException {
+	public static void main(String[] rawArgs) throws InterruptedException, IOException, KeyManagementException, NoSuchAlgorithmException {
 		Map<String, Set<String>> opts = new HashMap<>();
 		Set<String> flags = new HashSet<>();
 		List<String> args = new LinkedList<>();
@@ -338,6 +344,28 @@ public class LinkChecker {
 
 		String redisHost = opts.getOrDefault("redis-host", Collections.emptySet()).stream().findFirst().orElse(System.getProperty("redis.host", "localhost"));
 		String redisPort = opts.getOrDefault("redis-port", Collections.emptySet()).stream().findFirst().orElse(System.getProperty("redis.port", "6379"));
+
+		if (flags.contains("ignore-ssl-errors")) {
+			// Create a trust manager that does not validate certificate chains
+			TrustManager[] trustAllCerts = new TrustManager[]{
+				new X509TrustManager() {
+					public java.security.cert.X509Certificate[] getAcceptedIssuers() {
+						return null;
+					}
+					public void checkClientTrusted(
+						java.security.cert.X509Certificate[] certs, String authType) {
+					}
+					public void checkServerTrusted(
+						java.security.cert.X509Certificate[] certs, String authType) {
+					}
+				}
+			};
+
+			// Install the all-trusting trust manager
+			SSLContext sc = SSLContext.getInstance("SSL");
+			sc.init(null, trustAllCerts, null);
+			HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
+		}
 
 		try (Socket socket = new Socket(redisHost, Integer.valueOf(redisPort))) {
 			Redis redis = new Redis(socket);
