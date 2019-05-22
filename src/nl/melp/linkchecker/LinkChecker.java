@@ -74,8 +74,9 @@ public class LinkChecker {
 		try {
 			long dt = (System.currentTimeMillis() - startTimeMs) / 1000;
 			int size = statuses.size();
-			Set<Future> remove = new HashSet<>();
+
 			synchronized (running) {
+				Set<Future> remove = new HashSet<>();
 				for (var r : running) {
 					if (r.isDone()) {
 						remove.add(r);
@@ -83,6 +84,7 @@ public class LinkChecker {
 				}
 				running.removeAll(remove);
 			}
+
 			Runtime rt = Runtime.getRuntime();
 			long memTotal = rt.totalMemory();
 			long memFree = rt.freeMemory();
@@ -426,7 +428,7 @@ public class LinkChecker {
 					}
 					if (opts.containsKey("ignore")) {
 						for (String s : opts.get("ignore")) {
-							if (url.getPath().matches(s)) {
+							if (url.toString().matches(s)) {
 								logger.trace("URL " + url + " matches pattern " + s + "; ignoring");
 								return false;
 							}
