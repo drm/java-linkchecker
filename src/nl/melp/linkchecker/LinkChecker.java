@@ -44,6 +44,7 @@ public class LinkChecker {
 	private final Set<Future> running;
 	private final BiPredicate<URI, URI> shouldFollowLinks;
 	private final BiPredicate<URI, HttpResponse<String>> shouldExtractLinks;
+	private final int msDelay;
 	private long startTimeMs;
 
 	public LinkChecker(
@@ -53,7 +54,8 @@ public class LinkChecker {
 		Map<String, Set<URI>> invalidUrls,
 		BiPredicate<URI, URI> shouldFollowLinks,
 		BiPredicate<URI, HttpResponse<String>> shouldExtractLinks,
-		int numThreads
+		int numThreads,
+		int msDelay
 	) {
 		this.urls = urlsToCheck;
 		this.shouldFollowLinks = shouldFollowLinks;
@@ -64,6 +66,7 @@ public class LinkChecker {
 		this.executor = Executors.newFixedThreadPool(numThreads);
 		this.running = new HashSet<>();
 		this.clients = new LinkedBlockingDeque<>(numThreads);
+		this.msDelay = msDelay;
 
 		for (int i = 0; i < numThreads; i++) {
 			clients.offer(HttpClient.newHttpClient());
@@ -138,9 +141,12 @@ public class LinkChecker {
 							if (statuses.get(url) >= 0) {
 								return; // URL was resolved by another thread.
 							}
+							// give the system some rest (if configured)
+							if (msDelay > 0) {
+								Thread.sleep(msDelay);
+							}
 
 							logger.trace("OPENING " + url);
-
 							HttpRequest request = HttpRequest.newBuilder()
 								.uri(url)
 								.timeout(Duration.ofSeconds(timeout))
@@ -443,7 +449,8 @@ public class LinkChecker {
 					return false;
 				},
 				(context, response) -> !flags.contains("no-follow") && localHosts.contains(context.getHost()),
-				opts.containsKey("threads") ? Integer.valueOf(opts.get("threads").stream().findFirst().orElse("40")) : 40
+				opts.containsKey("threads") ? Integer.valueOf(opts.get("threads").stream().findFirst().orElse("40")) : 40,
+				opts.containsKey("delay-ms") ? Integer.valueOf(opts.get("delay-ms").stream().findFirst().orElse("20")) : 20
 			);
 
 			if (flags.contains("resume") || flags.contains("reset")) {
