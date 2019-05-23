@@ -1,7 +1,6 @@
 ./build.sh
 
 java \
-    "-Dlog4j.configuration=file:./log4j.debugging.properties" \
     -Xmx512M \
     -Xms512M \
     -cp 'lib/*:bin' \
