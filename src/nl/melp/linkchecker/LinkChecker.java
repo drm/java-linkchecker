@@ -2,6 +2,12 @@ package nl.melp.linkchecker;
 
 import nl.melp.redis.Redis;
 import nl.melp.redis.collections.*;
+import org.apache.http.Header;
+import org.apache.http.HttpEntity;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -17,12 +23,8 @@ import java.io.IOException;
 import java.net.ConnectException;
 import java.net.Socket;
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
-import java.time.Duration;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
@@ -35,7 +37,7 @@ public class LinkChecker {
 	private static Logger logger = LoggerFactory.getLogger(LinkChecker.class);
 	private static int timeout = 30;
 
-	private final BlockingDeque<HttpClient> clients;
+	private final BlockingDeque<CloseableHttpClient> clients;
 	private final Map<URI, Integer> statuses;
 	private final Collection<URI> urls;
 	private final Map<URI, Set<URI>> reverseLinks;
@@ -43,7 +45,7 @@ public class LinkChecker {
 	private final ExecutorService executor;
 	private final Set<Future> running;
 	private final BiPredicate<URI, URI> shouldFollowLinks;
-	private final BiPredicate<URI, HttpResponse<String>> shouldExtractLinks;
+	private final BiPredicate<URI, HttpEntity> shouldExtractLinks;
 	private final int msDelay;
 	private long startTimeMs;
 
@@ -53,7 +55,7 @@ public class LinkChecker {
 		Map<URI, Set<URI>> reverseLinks,
 		Map<String, Set<URI>> invalidUrls,
 		BiPredicate<URI, URI> shouldFollowLinks,
-		BiPredicate<URI, HttpResponse<String>> shouldExtractLinks,
+		BiPredicate<URI, HttpEntity> shouldExtractLinks,
 		int numThreads,
 		int msDelay
 	) {
@@ -69,7 +71,7 @@ public class LinkChecker {
 		this.msDelay = msDelay;
 
 		for (int i = 0; i < numThreads; i++) {
-			clients.offer(HttpClient.newHttpClient());
+			clients.offer(HttpClients.createMinimal());
 		}
 	}
 
@@ -133,7 +135,7 @@ public class LinkChecker {
 					continue;
 				}
 				statuses.put(url, -1);
-				HttpClient httpClient = clients.take();
+				CloseableHttpClient httpClient = clients.take();
 
 				Future<?> task = executor.submit(
 					() -> {
@@ -147,42 +149,42 @@ public class LinkChecker {
 							}
 
 							logger.trace("OPENING " + url);
-							HttpRequest request = HttpRequest.newBuilder()
-								.uri(url)
-								.timeout(Duration.ofSeconds(timeout))
-								.build();
 
-							HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-							int status = response.statusCode();
-							statuses.put(url, status);
+							var request = new HttpGet(url);
+							try (CloseableHttpResponse response = httpClient.execute(request)) {
+								int status = response.getStatusLine().getStatusCode();
+								statuses.put(url, status);
 
-							if (status >= 400) {
-								logger.info("Got status " + status + " at " + url + "; so far referred to by " + reverseLinks.get(url));
-							} else {
-								logger.trace("Got status " + status + " at " + url);
-							}
+								if (status >= 400) {
+									logger.info("Got status " + status + " at " + url + "; so far referred to by " + reverseLinks.get(url));
+								} else {
+									logger.trace("Got status " + status + " at " + url);
+								}
+								HttpEntity responseEntity = response.getEntity();
 
-							if (shouldExtractLinks.test(url, response)) {
-								String contentType = response.headers().firstValue("Content-Type").orElse("");
-								if (status == 200) {
-									if (contentType.startsWith("text/html")) {
-										response.body();
-										Document d = Jsoup.parse(response.body());
-										Elements links = d.select("a[href]");
-										logger.trace("Found " + links.size() + " on " + url);
-										for (Element link : links) {
-											addUrl(url, link.attr("href"));
+								if (shouldExtractLinks.test(url, responseEntity)) {
+									Header contentTypeHeader = response.getFirstHeader("Content-Type");
+									String contentType = contentTypeHeader == null ? "UNKNOWN" : contentTypeHeader.getValue();
+
+									if (status == 200) {
+										if (contentType.startsWith("text/html")) {
+											Document d = Jsoup.parse(responseEntity.getContent(), "UTF-8", url.toString());
+											Elements links = d.select("a[href]");
+											logger.trace("Found " + links.size() + " on " + url);
+											for (Element link : links) {
+												addUrl(url, link.attr("href"));
+											}
+										} else {
+											logger.trace("Not following links in content type " + contentType);
+										}
+									} else if (response.getFirstHeader("Location") != null) {
+										String location = response.getFirstHeader("Location").getValue();
+										if (addUrl(url, location)) {
+											logger.trace("Following redirect (" + status + ") [" + url + " => " + location);
 										}
 									} else {
-										logger.trace("Not following links in content type " + response.headers().firstValue("Content-Type").orElse("UNKNOWN"));
+										logger.debug("Skipping {}, content-type: {}", url, contentType);
 									}
-								} else if (response.headers().firstValue("Location").isPresent()) {
-									String location = response.headers().firstValue("Location").get();
-									if (addUrl(url, location)) {
-										logger.trace("Following redirect (" + status + ") [" + url + " => " + location);
-									}
-								} else {
-									logger.debug("Skipping {}, content-type: {}", url, contentType);
 								}
 							}
 						} catch (java.lang.IllegalArgumentException | IOException e) {
