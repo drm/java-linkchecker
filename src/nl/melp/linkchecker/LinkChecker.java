@@ -4,6 +4,7 @@ import nl.melp.redis.Redis;
 import nl.melp.redis.collections.*;
 import org.apache.http.Header;
 import org.apache.http.HttpEntity;
+import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.impl.client.CloseableHttpClient;
@@ -43,7 +44,7 @@ public class LinkChecker {
 	private final Map<URI, Set<URI>> reverseLinks;
 	private final Map<String, Set<URI>> invalidUrls;
 	private final ExecutorService executor;
-	private final Set<Future> running;
+	private final Set<Future<?>> running;
 	private final BiPredicate<URI, URI> shouldFollowLinks;
 	private final BiPredicate<URI, HttpEntity> shouldExtractLinks;
 	private final int msDelay;
@@ -70,8 +71,14 @@ public class LinkChecker {
 		this.clients = new LinkedBlockingDeque<>(numThreads);
 		this.msDelay = msDelay;
 
+		RequestConfig config = RequestConfig.custom()
+			.setConnectTimeout(timeout * 1000)
+			.setConnectionRequestTimeout(timeout * 1000)
+			.setSocketTimeout(timeout * 1000)
+			.build();
+
 		for (int i = 0; i < numThreads; i++) {
-			clients.offer(HttpClients.createMinimal());
+			clients.offer(HttpClients.custom().setDefaultRequestConfig(config).build());
 		}
 	}
 
@@ -81,7 +88,7 @@ public class LinkChecker {
 			int size = statuses.size();
 
 			synchronized (running) {
-				Set<Future> remove = new HashSet<>();
+				Set<Future<?>> remove = new HashSet<>();
 				for (var r : running) {
 					if (r.isDone()) {
 						remove.add(r);
@@ -120,14 +127,19 @@ public class LinkChecker {
 		Set<ExecutorService> executorServices = new HashSet<>();
 		executorServices.add(executor);
 
-		ScheduledExecutorService loggerService = Executors.newScheduledThreadPool(1);
+		ScheduledExecutorService loggerService = Executors.newScheduledThreadPool(1, runnable -> {
+			Thread t = new Thread(runnable);
+			t.setDaemon(true);
+			return t;
+		});
+
 		executorServices.add(loggerService);
 
 		startTimeMs = System.currentTimeMillis();
 
 		this.logMonitor();
 		loggerService.scheduleAtFixedRate(this::logMonitor, 1, 1, TimeUnit.SECONDS);
-		HashMap<Future, Long> startedAt = new HashMap<>();
+		HashMap<Future<?>, Long> startedAt = new HashMap<>();
 		do {
 			for (URI url : urls) {
 				urls.remove(url);
@@ -156,7 +168,7 @@ public class LinkChecker {
 								statuses.put(url, status);
 
 								if (status >= 400) {
-									logger.info("Got status " + status + " at " + url + "; so far referred to by " + reverseLinks.get(url));
+									logger.info("Got status " + status + " at " + url + "; so far referred to by " + Arrays.toString(reverseLinks.get(url).toArray()));
 								} else {
 									logger.trace("Got status " + status + " at " + url);
 								}
@@ -377,7 +389,7 @@ public class LinkChecker {
 			HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
 		}
 
-		try (Socket socket = new Socket(redisHost, Integer.valueOf(redisPort))) {
+		try (Socket socket = new Socket(redisHost, Integer.parseInt(redisPort))) {
 			Redis redis = new Redis(socket);
 			Set<URI> urls = new SerializedSet<>(redis, LinkChecker.class.getCanonicalName() + ".urls");
 			SerializedHashMap<URI, Integer> results = new SerializedHashMap<>(redis, LinkChecker.class.getCanonicalName() + ".statuses");
@@ -396,13 +408,18 @@ public class LinkChecker {
 				results.forEach((k, v) -> {
 					if (isErrorStatus(v)) {
 						if (flags.contains("recheck-only-errors") && v > 0) {
+							logger.trace("recheck - skip status {} for {}", v, k);
 							return;
 						}
 						if (!flags.contains("recheck") && v >= 0) {
+							logger.trace("recheck - skip status {} for {}", v, k);
 							return;
 						}
+						logger.debug("recheck - add status {} for {}", v, k);
 						urls.add(k);
 						reset.add(k);
+					} else {
+						logger.trace("recheck - no error {} for {}", v, k);
 					}
 				});
 				if (reset.size() > 0) {
@@ -410,7 +427,7 @@ public class LinkChecker {
 					urls.addAll(reset);
 					reset.forEach(results::remove);
 				} else {
-					logger.info("None found.", reset.size());
+					logger.info("None found.");
 				}
 			}
 
@@ -451,8 +468,8 @@ public class LinkChecker {
 					return false;
 				},
 				(context, response) -> !flags.contains("no-follow") && localHosts.contains(context.getHost()),
-				opts.containsKey("threads") ? Integer.valueOf(opts.get("threads").stream().findFirst().orElse("40")) : 40,
-				opts.containsKey("delay-ms") ? Integer.valueOf(opts.get("delay-ms").stream().findFirst().orElse("20")) : 20
+				opts.containsKey("threads") ? Integer.parseInt(opts.get("threads").stream().findFirst().orElse("40")) : 40,
+				opts.containsKey("delay-ms") ? Integer.parseInt(opts.get("delay-ms").stream().findFirst().orElse("20")) : 20
 			);
 
 			if (flags.contains("resume") || flags.contains("reset")) {
