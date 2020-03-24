@@ -249,7 +249,7 @@ public class LinkChecker {
 
 	public void report() {
 		for (Map.Entry<String, Set<URI>> entry : invalidUrls.entrySet()) {
-			System.out.println("INVALID: " + entry.getKey() + " (referred by following urls:)");
+			System.out.println("INVALID: " + entry.getKey() + " - referred by following urls");
 			for (URI referredBy : invalidUrls.get(entry.getKey())) {
 				System.out.println(" + " + referredBy);
 			}
