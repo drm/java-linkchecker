@@ -39,9 +39,9 @@ fetch() {
 		)
 		rm -rf "$dir";
 	}
-	
+
 	fetch_maven_deps \
-		'org.apache.httpcomponents:httpclient:4.5.3' \
+		'org.apache.httpcomponents:httpclient:4.5.12' \
 		'junit:junit:4.12' \
 		'org.slf4j:slf4j-log4j12:1.7.7' \
 		'org.jsoup:jsoup:1.11.3'

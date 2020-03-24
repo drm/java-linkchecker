@@ -19,11 +19,13 @@ java -cp 'lib/*:bin/*.jar' nl.melp.linkchecker.LinkChecker
     [--redis-host=HOST]
     [--redis-port=PORT]
     [--threads=N]
-    [--reset|--resume]
-    [--report|--report-ok]
+    [--reset|--resume|--recheck]
+    [--report|--report-all]
     [--follow-local|--follow-from-local|--no-follow]
-    [--recheck|--recheck-only-errors|--no-recheck]
+    [--recheck-only-errors|--no-recheck]
     [--ignore=PATTERN1[,PATTERN2...] [--ignore=PATTERN3...]]
+    [--include=PATTERN1[,PATTERN2...] [--include=PATTERN3...]]
+    [--ignore-ssl-errors]
     http://localhost/
     https://localhost/
 ```
@@ -35,19 +37,26 @@ java -cp 'lib/*:bin/*.jar' nl.melp.linkchecker.LinkChecker
 | `--threads=N`  | Configure number of threads to use. There will be running 1 master thread, 1 logger thread and N worker threads. |
 | `--redis-host=HOST` | Configure HOST as the Redis host. |
 | `--redis-port=PORT` | Configure PORT as the Redis port |
-| `--follow-local` | Only local links to that local domain are followed* |
-| `--follow-from-local` | Only follow links that are mentioned on the local domain. This means that the link checker only spans over multiple hosts *once*. |
+| `--follow-local` | Only local links to that local* domain are followed |
+| `--follow-from-local` | Only follow links that are mentioned on the local* domain. This means that the link checker only spans over multiple hosts *once*. |
 | `--no-follow` | No links are followed. This is typically useful in combination with the `--recheck` flag |
 | `--recheck` | Reset the status for each of the previously failed URLs, and try them again. |
-| `--recheck-only-errors` | Only recheck links that had an internal error state, i.e. all urls that (which usually are out of your control anyway |
-| `--no-recheck` | Don't do recheck, even if url's are marked as "processing". This happens if a linkchecker process was interrupted without finishing cleanly. |
+| `--recheck-only-errors` | Only recheck links that had an internal error state, i.e. all urls that had connection errors, timeouts, etc. |
+| `--no-recheck` | Don't do recheck, even if url's are marked as "processing". |
 | `--reset` | Start with a clean slate |
 | `--resume` | Resume a previously stopped session. |
 | `--report` | When done, write a report to stdout and to reporting keys in Redis. |
 | `--report-all` | Also report working links. By default, only error statuses are reported |
 
 *) The start URLs passed in the command line will be considered "local
-domains". This means that with  
+domains". This means that with the flags `--follow-from-local`, pages
+read from domains that are part of the arguments list are considered
+"local" pages and every link mentioned on that page will be followed.
+Similarly, if the `--follow-local` flag is passed, only links on the
+same domain as the domains mentioned in these start urls are followed.
+
+Note that this way you can actually allow multiple domains to be checked,
+by specifying multiple start urls on different domains. 
 
 ## Resuming state
 All status data is stored in Maps and Sets which are persisted in

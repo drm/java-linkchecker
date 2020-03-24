@@ -7,8 +7,16 @@ import org.apache.http.HttpEntity;
 import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
+import org.apache.http.config.RegistryBuilder;
+import org.apache.http.conn.HttpClientConnectionManager;
+import org.apache.http.conn.socket.ConnectionSocketFactory;
+import org.apache.http.conn.socket.PlainConnectionSocketFactory;
+import org.apache.http.conn.ssl.NoopHostnameVerifier;
+import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
+import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
+import org.apache.http.ssl.SSLContextBuilder;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -16,15 +24,13 @@ import org.jsoup.select.Elements;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
 import java.io.IOException;
 import java.net.ConnectException;
 import java.net.Socket;
 import java.net.URI;
 import java.security.KeyManagementException;
+import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
@@ -32,11 +38,18 @@ import java.time.format.DateTimeFormatter;
 import java.util.Collection;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiPredicate;
 
 public class LinkChecker {
 	private static Logger logger = LoggerFactory.getLogger(LinkChecker.class);
 	private static int timeout = 30;
+
+	private static RequestConfig requestConfig = RequestConfig.custom()
+		.setConnectTimeout(timeout * 1000)
+		.setConnectionRequestTimeout(timeout * 1000)
+		.setSocketTimeout(timeout * 1000)
+		.build();
 
 	private final BlockingDeque<CloseableHttpClient> clients;
 	private final Map<URI, Integer> statuses;
@@ -58,27 +71,42 @@ public class LinkChecker {
 		BiPredicate<URI, URI> shouldFollowLinks,
 		BiPredicate<URI, HttpEntity> shouldExtractLinks,
 		int numThreads,
-		int msDelay
-	) {
+		int msDelay,
+		boolean ignoreSslErrors
+	) throws KeyStoreException, NoSuchAlgorithmException, KeyManagementException {
 		this.urls = urlsToCheck;
 		this.shouldFollowLinks = shouldFollowLinks;
 		this.shouldExtractLinks = shouldExtractLinks;
 		this.statuses = results;
 		this.reverseLinks = reverseLinks;
 		this.invalidUrls = invalidUrls;
-		this.executor = Executors.newFixedThreadPool(numThreads);
+		AtomicInteger counter = new AtomicInteger(0);
+		this.executor = Executors.newFixedThreadPool(numThreads, runnable -> {
+			Thread t = new Thread(runnable);
+			t.setName("http-client-" + counter.incrementAndGet());
+			return t;
+		});
 		this.running = new HashSet<>();
 		this.clients = new LinkedBlockingDeque<>(numThreads);
 		this.msDelay = msDelay;
 
-		RequestConfig config = RequestConfig.custom()
-			.setConnectTimeout(timeout * 1000)
-			.setConnectionRequestTimeout(timeout * 1000)
-			.setSocketTimeout(timeout * 1000)
-			.build();
+		HttpClientConnectionManager connectionManager = new PoolingHttpClientConnectionManager(); // default
+		if (ignoreSslErrors) {
+			final SSLContext sslContext = new SSLContextBuilder()
+				.loadTrustMaterial(null, (x509CertChain, authType) -> true)
+				.build();
+
+			connectionManager = new PoolingHttpClientConnectionManager(
+					RegistryBuilder.<ConnectionSocketFactory>create()
+						.register("http", PlainConnectionSocketFactory.INSTANCE)
+						.register("https", new SSLConnectionSocketFactory(sslContext, NoopHostnameVerifier.INSTANCE))
+						.build()
+			);
+		}
 
 		for (int i = 0; i < numThreads; i++) {
-			clients.offer(HttpClients.custom().setDefaultRequestConfig(config).build());
+			final CloseableHttpClient client = HttpClients.createMinimal(connectionManager);
+			clients.offer(client);
 		}
 	}
 
@@ -130,6 +158,7 @@ public class LinkChecker {
 		ScheduledExecutorService loggerService = Executors.newScheduledThreadPool(1, runnable -> {
 			Thread t = new Thread(runnable);
 			t.setDaemon(true);
+			t.setName("log-monitor");
 			return t;
 		});
 
@@ -137,7 +166,7 @@ public class LinkChecker {
 
 		startTimeMs = System.currentTimeMillis();
 
-		this.logMonitor();
+		logMonitor();
 		loggerService.scheduleAtFixedRate(this::logMonitor, 1, 1, TimeUnit.SECONDS);
 		HashMap<Future<?>, Long> startedAt = new HashMap<>();
 		do {
@@ -163,12 +192,13 @@ public class LinkChecker {
 							logger.trace("OPENING " + url);
 
 							var request = new HttpGet(url);
+							request.setConfig(requestConfig);
 							try (CloseableHttpResponse response = httpClient.execute(request)) {
 								int status = response.getStatusLine().getStatusCode();
 								statuses.put(url, status);
 
 								if (status >= 400) {
-									logger.info("Got status " + status + " at " + url + "; so far referred to by " + Arrays.toString(reverseLinks.get(url).toArray()));
+									logger.info("Got status " + status + " at " + url + "; so far referred to by " + Arrays.toString(new HashSet<>(reverseLinks.get(url)).toArray()));
 								} else {
 									logger.trace("Got status " + status + " at " + url);
 								}
@@ -247,7 +277,7 @@ public class LinkChecker {
 	}
 
 
-	public void report() {
+	public void report(boolean all) {
 		for (Map.Entry<String, Set<URI>> entry : invalidUrls.entrySet()) {
 			System.out.println("INVALID: " + entry.getKey() + " - referred by following urls");
 			for (URI referredBy : invalidUrls.get(entry.getKey())) {
@@ -265,6 +295,9 @@ public class LinkChecker {
 				}
 				numErr++;
 			} else {
+				if (all) {
+					System.out.println("[OK] at " + r.getKey());
+				}
 				numSuccess++;
 			}
 		}
@@ -284,10 +317,14 @@ public class LinkChecker {
 		URI uri;
 
 		try {
-			uri = URI.create(linkedUrl);
+			uri = context.resolve(linkedUrl);
 		} catch (IllegalArgumentException e) {
 			registerInvalidUrl(context, linkedUrl, e.getMessage());
 			return false;
+		}
+
+		if (!"".equals(uri.getFragment()) && uri.getFragment() != null) {
+			uri = URI.create(uri.toString().replace("#" + uri.getRawFragment(), ""));
 		}
 
 		if (uri.getPath() == null && uri.getScheme() == null) {
@@ -334,7 +371,7 @@ public class LinkChecker {
 		invalidUrls.get(url).add(mentionedAt);
 	}
 
-	public static void main(String[] rawArgs) throws InterruptedException, IOException, KeyManagementException, NoSuchAlgorithmException {
+	public static void main(String[] rawArgs) throws InterruptedException, IOException, KeyManagementException, NoSuchAlgorithmException, KeyStoreException {
 		Map<String, Set<String>> opts = new HashMap<>();
 		Set<String> flags = new HashSet<>();
 		List<String> args = new LinkedList<>();
@@ -367,28 +404,6 @@ public class LinkChecker {
 		String redisHost = opts.getOrDefault("redis-host", Collections.emptySet()).stream().findFirst().orElse(System.getProperty("redis.host", "localhost"));
 		String redisPort = opts.getOrDefault("redis-port", Collections.emptySet()).stream().findFirst().orElse(System.getProperty("redis.port", "6379"));
 
-		if (flags.contains("ignore-ssl-errors")) {
-			// Create a trust manager that does not validate certificate chains
-			TrustManager[] trustAllCerts = new TrustManager[]{
-				new X509TrustManager() {
-					public java.security.cert.X509Certificate[] getAcceptedIssuers() {
-						return null;
-					}
-					public void checkClientTrusted(
-						java.security.cert.X509Certificate[] certs, String authType) {
-					}
-					public void checkServerTrusted(
-						java.security.cert.X509Certificate[] certs, String authType) {
-					}
-				}
-			};
-
-			// Install the all-trusting trust manager
-			SSLContext sc = SSLContext.getInstance("SSL");
-			sc.init(null, trustAllCerts, null);
-			HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
-		}
-
 		try (Socket socket = new Socket(redisHost, Integer.parseInt(redisPort))) {
 			Redis redis = new Redis(socket);
 			Set<URI> urls = new SerializedSet<>(redis, LinkChecker.class.getCanonicalName() + ".urls");
@@ -402,7 +417,7 @@ public class LinkChecker {
 				results.clear();
 				reverseLinks.clear();
 				invalidUrls.clear();
-			} else if (!flags.contains("no-recheck") && (flags.contains("resume") || flags.contains("reset"))) {
+			} else if (!flags.contains("no-recheck") && (flags.contains("resume") || flags.contains("recheck"))) {
 				Set<URI> reset = new HashSet<>();
 				logger.info("Scanning " + results.size() + " results for recheckable links");
 				results.forEach((k, v) -> {
@@ -432,7 +447,11 @@ public class LinkChecker {
 			}
 
 			for (String arg : args) {
-				urls.add(URI.create(arg));
+				URI uri = URI.create(arg);
+				if (uri.getPath() == null || uri.getPath().equals("")) {
+					uri = uri.resolve("/");
+				}
+				urls.add(uri);
 			}
 
 			LinkChecker linkChecker = new LinkChecker(
@@ -469,10 +488,11 @@ public class LinkChecker {
 				},
 				(context, response) -> !flags.contains("no-follow") && localHosts.contains(context.getHost()),
 				opts.containsKey("threads") ? Integer.parseInt(opts.get("threads").stream().findFirst().orElse("40")) : 40,
-				opts.containsKey("delay-ms") ? Integer.parseInt(opts.get("delay-ms").stream().findFirst().orElse("20")) : 20
+				opts.containsKey("delay-ms") ? Integer.parseInt(opts.get("delay-ms").stream().findFirst().orElse("20")) : 20,
+				flags.contains("ignore-ssl-errors")
 			);
 
-			if (flags.contains("resume") || flags.contains("reset")) {
+			if (flags.contains("resume") || flags.contains("reset") || flags.contains("recheck")) {
 				Map<String, String> timestamps = new SerializedHashMap<>(Serializers.of(String.class), Serializers.of(String.class), redis, LinkChecker.class.getCanonicalName() + ".timestamps");
 				timestamps.remove("stop");
 				if (flags.contains("reset")) {
@@ -538,7 +558,7 @@ public class LinkChecker {
 						uri.stream().map(URI::toString).toArray(String[]::new))
 					);
 				});
-				linkChecker.report();
+				linkChecker.report(flags.contains("report-all"));
 			}
 		} catch (ConnectException e) {
 			throw new RuntimeException(String.format("Error connecting to redis at %s:%s", redisHost, redisPort), e);
