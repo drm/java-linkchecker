@@ -411,12 +411,14 @@ public class LinkChecker {
 
 			Map<URI, Set<URI>> reverseLinks = new SerializedMappedSet<>(Serializers.of(URI.class), Serializers.of(URI.class), redis, prefixKeyName(".reverseLinks"));
 			Map<String, Set<URI>> invalidUrls = new SerializedMappedSet<>(Serializers.of(String.class), Serializers.of(URI.class), redis, LinkChecker.class.getCanonicalName() + ".invalidUrls");
+			Map<String, String> timestamps = new SerializedHashMap<>(Serializers.of(String.class), Serializers.of(String.class), redis, LinkChecker.class.getCanonicalName() + ".timestamps");
 
 			if (flags.contains("reset")) {
 				urls.clear();
 				results.clear();
 				reverseLinks.clear();
 				invalidUrls.clear();
+				timestamps.clear();
 			} else if (!flags.contains("no-recheck") && (flags.contains("resume") || flags.contains("recheck"))) {
 				Set<URI> reset = new HashSet<>();
 				logger.info("Scanning " + results.size() + " results for recheckable links");
@@ -493,7 +495,6 @@ public class LinkChecker {
 			);
 
 			if (flags.contains("resume") || flags.contains("reset") || flags.contains("recheck")) {
-				Map<String, String> timestamps = new SerializedHashMap<>(Serializers.of(String.class), Serializers.of(String.class), redis, LinkChecker.class.getCanonicalName() + ".timestamps");
 				timestamps.remove("stop");
 				if (flags.contains("reset")) {
 					timestamps.put("start", ZonedDateTime.now(ZoneOffset.UTC).format(DateTimeFormatter.ISO_DATE_TIME));
@@ -533,6 +534,7 @@ public class LinkChecker {
 						}
 					},
 					redis, LinkChecker.class.getCanonicalName() + ".report.statuses");
+
 				SerializedHashMap<String, String> refers = new SerializedHashMap<>(
 					stringSerializer,
 					stringSerializer,
