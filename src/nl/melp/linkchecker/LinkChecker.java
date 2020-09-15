@@ -316,11 +316,18 @@ public class LinkChecker {
 	private boolean addUrl(URI context, String linkedUrl) {
 		URI uri;
 
-		try {
-			uri = context.resolve(linkedUrl);
-		} catch (IllegalArgumentException e) {
-			registerInvalidUrl(context, linkedUrl, e.getMessage());
-			return false;
+		if (linkedUrl.isBlank()) {
+			// According to the RFC, and empty link resolves to the top of the current document;
+			// see https://stackoverflow.com/questions/5637969/is-an-empty-href-valid
+			uri = context;
+		} else {
+			try {
+				uri = context.resolve(linkedUrl);
+				logger.trace("Link from " + context + " to '" + linkedUrl + " resolved to '" + uri + "'");
+			} catch (IllegalArgumentException e) {
+				registerInvalidUrl(context, linkedUrl, e.getMessage());
+				return false;
+			}
 		}
 
 		if (!"".equals(uri.getFragment()) && uri.getFragment() != null) {
