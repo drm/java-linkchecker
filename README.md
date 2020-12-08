@@ -40,8 +40,7 @@ java -cp 'lib/*:bin/*.jar' nl.melp.linkchecker.LinkChecker
 | `--follow-local` | Only local links to that local* domain are followed |
 | `--follow-from-local` | Only follow links that are mentioned on the local* domain. This means that the link checker only spans over multiple hosts *once*. |
 | `--no-follow` | No links are followed. This is typically useful in combination with the `--recheck` flag |
-| `--recheck` | Reset the status for each of the previously failed URLs, and try them again. |
-| `--recheck-only-errors` | Only recheck links that had an internal error state, i.e. all urls that had connection errors, timeouts, etc. |
+| `--recheck` | Reset the status for each of the previously failed URLs, and recheck the pages they are mentioned on. |
 | `--no-recheck` | Don't do recheck, even if url's are marked as "processing". |
 | `--reset` | Start with a clean slate |
 | `--resume` | Resume a previously stopped session. |
@@ -76,4 +75,4 @@ won't need further configuration.
 Please report them at github.com/drm/java-linkchecker
 
 # Copyright
-(c) 2019 Gerard van Helden
+(c) 2019-2020 Gerard van Helden

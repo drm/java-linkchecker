@@ -46,7 +46,7 @@ fetch() {
 		'org.slf4j:slf4j-log4j12:1.7.7' \
 		'org.jsoup:jsoup:1.11.3'
 
-	curl -sL https://github.com/drm/java-redis-client/releases/download/v2.0.2/java-redis-client-v2.0.2--javac-11.0.2.jar -o ./java-redis-client-v2.0.2.jar
+	curl -sL https://github.com/drm/java-redis-client/releases/download/v2.1.0/java-redis-client-v2.1.0--javac-11.0.9.1.jar -o ./java-redis-client-v2.1.0.jar
 	curl -sL https://github.com/drm/java-redis-collections/releases/download/v1.0.2/java-redis-collections-v1.0.2--javac-11.0.7.jar -o ./java-redis-collections-v1.0.2.jar
 }
 
