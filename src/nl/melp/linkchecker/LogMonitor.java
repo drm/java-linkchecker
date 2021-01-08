@@ -30,8 +30,8 @@ public class LogMonitor {
 
 			logger.info(
 				String.format(
-					"processed: %d, processing: %d, to check: %d; (run time %ds, avg %d/s, mem usage: %d MB of %d MB (%.2f%%))",
-					size,
+					"[%.1f%%] (%d of %d remaining); (run time %ds, avg %d/s, mem usage: %d MB of %d MB (%.2f%%))",
+					((float)size / status.numQueueud()) * 100,
 					status.numPending(),
 					status.numQueueud(),
 					dt,

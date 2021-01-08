@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class InMemory extends Status {
 	private static class MappedSet<K, V> extends ConcurrentHashMap<K, Set<V>> {
 		@Override
+		@SuppressWarnings("unchecked")
 		public Set<V> get(Object key) {
 			Object ret = super.get(key);
 			if (ret == null) {
@@ -85,8 +86,6 @@ public class InMemory extends Status {
 	protected InMemory(Logger logger, RunConfig config, Map<URI, Integer> statuses, Set<URI> urls, Map<URI, Set<URI>> reverseLinks, Map<URI, Set<String>> invalidUrls) {
 		super(logger, config, statuses, urls, reverseLinks, invalidUrls);
 	}
-
-
 
 	@Override
 	public synchronized void add(Result fetch) {

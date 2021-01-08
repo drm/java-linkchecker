@@ -42,12 +42,13 @@ fetch() {
 
 	fetch_maven_deps \
 		'org.apache.httpcomponents:httpclient:4.5.12' \
+		'commons-cli:commons-cli:1.4' \
 		'junit:junit:4.12' \
 		'org.slf4j:slf4j-log4j12:1.7.7' \
 		'org.jsoup:jsoup:1.11.3'
 
 	curl -sL https://github.com/drm/java-redis-client/releases/download/v2.1.0/java-redis-client-v2.1.0--javac-11.0.9.1.jar -o ./java-redis-client-v2.1.0.jar
-	curl -sL https://github.com/drm/java-redis-collections/releases/download/v1.1.0/java-redis-collections-v1.1.0--javac-11.0.9.1.jar -o ./java-redis-collections-v1.1.0.jar
+	curl -sL https://github.com/drm/java-redis-collections/releases/download/v1.1.1/java-redis-collections-v1.1.1--javac-11.0.9.1.jar -o ./java-redis-collections-v1.1.1.jar
 }
 
 clean() {

@@ -1,4 +1,4 @@
-./build.sh
+#./build.sh
 
 java \
     -Xmx512M \

@@ -105,21 +105,6 @@ public class LinkCheckerTest {
 		}
 	}
 
-	public static LinkChecker createLinkChecker(String... args) throws NoSuchAlgorithmException, KeyStoreException, KeyManagementException {
-		RunConfig config = new MockRunConfig(args);
-		Status status = new MockStatus(config);
-		return new LinkChecker(
-			config,
-			status,
-			new Fetcher(
-				logger,
-				config,
-				new HtmlExtractor(logger),
-				new URIResolver(logger)
-			)
-		);
-	}
-
 	@Test
 	public void testRunInMemory() throws NoSuchAlgorithmException, KeyStoreException, KeyManagementException, InterruptedException {
 		MockStatus initialState = new MockStatus(new MockRunConfig());
