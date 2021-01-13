@@ -165,12 +165,11 @@ public class RunConfig {
 	public void report(Redis redis, LinkChecker linkchecker) {
 		if (hasFlag("report")) {
 			ISerializer<String> stringSerializer = Serializers.of(String.class);
-			ISerializer<Integer> intSerializer = Serializers.of(Integer.class);
 
 			//noinspection MismatchedQueryAndUpdateOfCollection
-			SerializedHashMap<String, Integer> report = new SerializedHashMap<>(
+			SerializedHashMap<String, String> report = new SerializedHashMap<>(
 				stringSerializer,
-				intSerializer,
+				stringSerializer,
 				redis, LinkChecker.class.getCanonicalName() + ".report.statuses");
 
 			//noinspection MismatchedQueryAndUpdateOfCollection
@@ -183,9 +182,9 @@ public class RunConfig {
 			report.clear();
 			refers.clear();
 
-			linkchecker.status.results.forEach((k, v) -> {
+			linkchecker.status.statuses.forEach((k, v) -> {
 				if (hasFlag("report-all") || LinkChecker.isErrorStatus(v)) {
-					report.put(k.toString(), v);
+					report.put(k.toString(), Integer.toString(v));
 					refers.put(k.toString(), linkchecker.status.reverseLinks.get(k).stream().map(URI::toString).collect(Collectors.joining("\n")));
 				}
 			});
@@ -200,7 +199,7 @@ public class RunConfig {
 				}
 			});
 			inverse.forEach((s, uri) -> {
-				report.put(s, 0);
+				report.put(s, "0");
 				refers.put(s, uri.stream().map(URI::toString).collect(Collectors.joining("\n")));
 			});
 

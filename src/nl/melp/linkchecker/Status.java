@@ -11,7 +11,6 @@ import java.util.Set;
 public class Status {
 	private final Logger logger;
 	public final Map<URI, Integer> statuses;
-	public final Map<URI, Integer> results;
 	public final Set<URI> urls;
 	public final Map<URI, Set<URI>> reverseLinks;
 	public final Map<URI, Set<String>> invalidUrls;
@@ -21,7 +20,6 @@ public class Status {
 		this.config = config;
 		this.logger = logger;
 		this.statuses = statuses;
-		this.results = statuses;
 		this.urls = urls;
 		this.reverseLinks = reverseLinks;
 		this.invalidUrls = invalidUrls;
