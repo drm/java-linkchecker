@@ -41,8 +41,8 @@ public class LinkCheckerTest {
 		}
 
 		@Override
-		public synchronized void add(Result fetch) {
-			super.add(fetch);
+		public synchronized void add(Result fetched) {
+			super.add(fetched);
 		}
 	}
 

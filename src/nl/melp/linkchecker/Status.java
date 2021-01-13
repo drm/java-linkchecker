@@ -37,12 +37,16 @@ public class Status {
 			}
 		} else if (!config.hasFlag("no-recheck") && (config.hasFlag("resume") || config.hasFlag("recheck"))) {
 			if (config.hasFlag("recheck")) {
-				urls.clear();
+				this.urls.clear();
 
 				Set<URI> resetStatus = new HashSet<>();
 				statuses.forEach((k, v) -> {
-					if (v != 200) {
-						startUrls.addAll(reverseLinks.get(k));
+					if (v >= 400 || v <= 0) {
+						// recheck all pages that refer to this link:
+						for (URI s : reverseLinks.get(k)) {
+							System.out.printf("Link [%d %s] <-- %s [RECHECK]%n", v, k, s);
+							startUrls.add(s);
+						}
 						resetStatus.add(k);
 					}
 				});
@@ -61,6 +65,11 @@ public class Status {
 		for (URI uri : startUrls) {
 			this.statuses.remove(uri);
 			this.urls.add(uri);
+		}
+		if (!config.hasFlag("resume")) {
+			for (URI uri : this.urls) {
+				this.statuses.remove(uri);
+			}
 		}
 	}
 
@@ -117,19 +126,19 @@ public class Status {
 		return urls.size();
 	}
 
-	public void add(Result fetch) {
-		statuses.put(fetch.getUri(), fetch.getStatusCode());
-		if (fetch.getStatusCode() > 0) {
-			invalidUrls.remove(fetch.getUri());
+	public void add(Result fetched) {
+		statuses.put(fetched.getUri(), fetched.getStatusCode());
+		if (fetched.getStatusCode() > 0) {
+			invalidUrls.remove(fetched.getUri());
 
-			if (fetch.getInvalidLinks() != null) {
-				for (String link : fetch.getInvalidLinks()) {
-					invalidUrls.get(fetch.getUri()).add(link);
+			if (fetched.getInvalidLinks() != null) {
+				for (String link : fetched.getInvalidLinks()) {
+					invalidUrls.get(fetched.getUri()).add(link);
 				}
 			}
-			if (fetch.getReferredLinks() != null) {
-				for (URI uri : fetch.getReferredLinks()) {
-					URI context = fetch.getUri();
+			if (fetched.getReferredLinks() != null) {
+				for (URI uri : fetched.getReferredLinks()) {
+					URI context = fetched.getUri();
 					if (uri != null) {
 						if (config.shouldFollowLinks(context, uri) && !statuses.containsKey(uri)) {
 							urls.add(uri);
